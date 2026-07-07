@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>マツワカ第8期 QR受付</title>
+  <style>
+    body { font-family: -apple-system, "Hiragino Kaku Gothic ProN", sans-serif; text-align:center; padding:20px; background:#f4f7f6; margin:0; }
+    h3 { margin:8px 0 16px; }
+    #reader { width:100%; max-width:360px; margin:0 auto; background:#fff; border-radius:8px; overflow:hidden; }
+    #status-box { margin:16px auto 0; max-width:360px; padding:16px; border-radius:8px; font-weight:500; background:#f0f0f0; line-height:1.6; }
+    button { padding:14px 24px; border:none; border-radius:10px; font-weight:500; font-size:16px; width:100%; max-width:360px; margin:12px auto 0; display:block; }
+    #start-btn { background:#1d9e75; color:#fff; }
+    #reset-btn  { background:#378add; color:#fff; display:none; }
+    .hint { color:#5f5e5a; font-size:13px; margin-top:14px; line-height:1.6; }
+  </style>
+</head>
+<body>
+  <h3>QRコードをかざしてください</h3>
+
+  <!-- カメラは必ずユーザーのタップで起動する（全ブラウザで最も確実） -->
+  <button id="start-btn" onclick="startCamera()">📷 カメラを起動する</button>
+
+  <div id="reader"></div>
+
+  <div id="status-box">「カメラを起動する」を押してください</div>
+
+  <button id="reset-btn" onclick="forceReset()">次の人をスキャンする</button>
+
+  <p class="hint">
+    このページはGoogleの枠(iframe)の外で動くため、カメラは確実に起動します。<br>
+    起動しない場合はブラウザのカメラ許可を「許可」にしてください。
+  </p>
+
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <script>
+    // ===============================================================
+    //  ★ここにGASウェブアプリの /exec URL を貼り付けてください★
+    //  例: https://script.google.com/macros/s/AKfy.../exec
+    // ===============================================================
+    const GAS_URL = "ここにGASの/execのURLを貼り付け";
+
+    let html5QrCode = null;
+    let isProcessing = false;
+    let lastScannedId = "";
+    let started = false;
+
+    function setStatus(state, msg, showReset) {
+      const box = document.getElementById('status-box');
+      box.innerHTML = msg;
+      box.style.background =
+        state === 'success' ? '#d4edda' :
+        state === 'error'   ? '#f8d7da' :
+        state === 'warning' ? '#fff3cd' : '#f0f0f0';
+      document.getElementById('reset-btn').style.display = showReset ? 'block' : 'none';
+    }
+
+    async function startCamera() {
+      if (started) return;
+      document.getElementById('start-btn').style.display = 'none';
+      setStatus('ready', 'カメラ起動中...', false);
+      html5QrCode = new Html5Qrcode('reader');
+      try {
+        await html5QrCode.start(
+          { facingMode: "environment" },
+          { fps: 10, qrbox: { width: 250, height: 250 } },
+          onScanSuccess
+        );
+        started = true;
+        setStatus('ready', '準備完了。QRをかざしてください', false);
+      } catch (err) {
+        document.getElementById('start-btn').style.display = 'block';
+        setStatus('error', 'カメラを起動できませんでした。<br>ブラウザのカメラ許可を確認してもう一度お試しください。', false);
+      }
+    }
+
+    async function onScanSuccess(decodedText) {
+      if (isProcessing || decodedText === lastScannedId) return;
+      isProcessing = true;
+      lastScannedId = decodedText;
+      setStatus('ready', 'ID確認中...', false);
+
+      try {
+        // Content-Type は text/plain にして preflight(CORS事前確認)を回避する
+        const res = await fetch(GAS_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ id: decodedText })
+        });
+        const data = await res.json();
+
+        if (data.status === 'DUPLICATE') {
+          setStatus('warning', 'すでに受付済です：<br>' + data.name + ' さん', true);
+        } else if (data.status === 'ERROR') {
+          setStatus('error', 'エラー：<br>' + (data.message || '不明なエラー'), true);
+        } else {
+          setStatus('success', '受付完了！<br>' + data.name + ' さん（' + data.count + '回目）', true);
+        }
+      } catch (err) {
+        setStatus('error', '通信エラー：<br>' + err.message + '<br>電波とGASのURLを確認してください', true);
+      }
+      // 一定時間後に自動で次のスキャンへ戻る
+      setTimeout(forceReset, 2500);
+    }
+
+    function forceReset() {
+      isProcessing = false;
+      setTimeout(() => { lastScannedId = ""; }, 1000);
+      setStatus('ready', '次の人をスキャンしてください', false);
+    }
+  </script>
+</body>
+</html>
